@@ -1,25 +1,22 @@
 from selenium import webdriver
 from selenium.webdriver import DesiredCapabilities
 
-PROXY = "127.0.0.1:8080"
-
-service_args = [
-    '--ignore-ssl-errors=true',
-    '--web-security=no',
-    '--ssl-protocol=any',
-    '--proxy=127.0.0.1:8080',
-    '--proxy-type=https']
-
-phantomjs_path = "/usr/bin/phantomjs"
-
-capabilities = DesiredCapabilities.PHANTOMJS
-# capabilities["phantomjs.page.settings.javascriptEnabled"] = "false"
-
 class Browser():
 
     driver = None
 
-    def __init__(self):
+    def __init__(self, proxy_ip_port = '127.0.0.1:8080'):
+        service_args = [
+            '--ignore-ssl-errors=true',
+            '--web-security=no',
+            '--ssl-protocol=any',
+            '--proxy=' + proxy_ip_port,
+            '--proxy-type=https']
+
+        phantomjs_path = "/usr/bin/phantomjs"
+
+        capabilities = DesiredCapabilities.PHANTOMJS
+
         self.driver = webdriver.PhantomJS(service_args=service_args, desired_capabilities= capabilities,
                                          executable_path=phantomjs_path, service_log_path="/var/log/phantomjs.log")
         self.driver.set_page_load_timeout(60)
