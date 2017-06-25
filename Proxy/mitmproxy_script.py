@@ -13,14 +13,21 @@ logger = logging.getLogger('root')
 
 class MitmScript:
 	__staticInitUrl = ""
+	__lastConnectionAddress = ("",0)
 
 	@staticmethod
-	def set_static_redirection_chain(url):
+	def set_static_redirection_chain(url, connectionAddrs):
 		if len(MitmScript.__staticInitUrl) == 0:
 			MitmScript.delete_redirection_chains()
 			MitmScript.__setStaticInitUrl(url)
+			urlObj = save_url_to_db(url)
 			redirectionChain = RedirectionChain(init_url = url, count = 0)
+			redirectionChain.chain.append(urlObj)
+			redirectionChain.count += 1
 			redirectionChain.save()
+
+		if MitmScript.__lastConnectionAddress == ("",0):
+			MitmScript.__set_lastConnectionaddress(connectionAddrs)
 
 	@staticmethod
 	def delete_redirection_chains():
@@ -31,76 +38,98 @@ class MitmScript:
 	def __setStaticInitUrl(url):
 		MitmScript.__staticInitUrl = url
 
+	@staticmethod
+	def __set_lastConnectionaddress(*address):
+		MitmScript.__lastConnectionAddress = address[0]
+
 	def request(self, flow):
 		# print("[request] " + flow.request.method + " " + flow.request.url)
 		# print("[request header] " + str(flow.request.headers))
+		if flow.server_conn.address:
+			connectionAddrs = flow.server_conn.address.address
+		elif flow.request:
+			connectionAddrs = (flow.request.host, flow.request.port)
+
 		if flow.request.method == "GET":
+			curr_requested_url = flow.request.url
 			redirection_candidates = load_urls_from_db()
-			MitmScript.set_static_redirection_chain(flow.request.url)
+			MitmScript.set_static_redirection_chain(curr_requested_url, connectionAddrs)
 			for candidate in redirection_candidates:
-				if flow.request.url == candidate:
-					print("match! " + flow.request.url + " == " + candidate)
+				if curr_requested_url == candidate and curr_requested_url != self.__staticInitUrl:
+					print("match! " + curr_requested_url + " == " + candidate)
 					urlObj = save_url_to_db(candidate)
 					redirection_chain = RedirectionChain.objects(init_url = MitmScript.__staticInitUrl).first()
-					redirection_chain.chain.append(urlObj)
-					redirection_chain.count += 1
-					redirection_chain.save()
-				else:
-					print("no match: " + flow.request.url + " != " + candidate)
+					add_url_to_chain(urlObj, redirection_chain)
+					MitmScript.__set_lastConnectionaddress(connectionAddrs)
+
+	def __last_url_in_chain(self, redirection_chain):
+		last = redirection_chain.chain[len(redirection_chain.chain)-1].raw_data
+		return last
 
 	def response(self, flow):
 		redirection = False
 		redirection_candidates = []
+		redirection_chain = RedirectionChain.objects(init_url=MitmScript.__staticInitUrl).first()
+		if redirection_chain is None:
+			return
+		curr_connection_addr = flow.server_conn.address.address
+		print("current connection: " + str(curr_connection_addr) + " == last connection: " + str(
+			self.__lastConnectionAddress) + " ?",)
+		if curr_connection_addr == self.__lastConnectionAddress:
+			print("yes")
+			# case: HTTP Redirects
+			if flow.response.status_code in [301, 302, 307]:
+				redirection = True
+				redirectUrl = flow.response.headers.get("Location", )
+				redirection_candidates.append(redirectUrl)
+				print("[HTTP Redirects] redirect to: " + redirectUrl)
 
-		# case: HTTP Redirects
-		if flow.response.status_code in [301, 302, 307]:
-			redirection = True
-			redirectUrl = flow.response.headers.get("Location", )
-			redirection_candidates.append(redirectUrl)
-			print("[HTTP Redirects] redirect to: " + redirectUrl)
+			# case: <meta http-equiv="Refresh" content="0; url=http://www.example.com/" />
+			content_type = flow.response.headers.get("Content-Type",)
+			if content_type and content_type.startswith("text/html"):
+				redirectUrl = ''
+				html = BeautifulSoup(flow.response.content, "html.parser")
+				metaTags = html.find_all(name='meta', attrs={'http-equiv': 'Refresh'})
+				for metaTag in metaTags:
+					if metaTag.has_attr('content'):
+						content = metaTag['content'].lower().split('url=')
+						if len(content)>1:
+							redirection = True
+							redirectUrl = content[1]
+							redirection_candidates.append(redirectUrl)
+							print("[HTML Meta refresh] redirect to: " + redirectUrl)
 
-		# case: <meta http-equiv="Refresh" content="0; url=http://www.example.com/" />
-		content_type = flow.response.headers.get("Content-Type",)
-		if content_type and content_type.startswith("text/html"):
-			redirectUrl = ''
-			html = BeautifulSoup(flow.response.content, "html.parser")
-			metaTags = html.find_all(name='meta', attrs={'http-equiv': 'Refresh'})
-			for metaTag in metaTags:
-				if metaTag.has_attr('content'):
-					content = metaTag['content'].lower().split('url=')
-					if len(content)>1:
-						redirection = True
-						redirectUrl = content[1]
+			js_red = ['location']
+			for red_code in js_red:
+				urlBeg = urlEnd = -1
+				loc = flow.response.content.find(red_code)
+				if loc != -1:
+					if flow.response.content.find('\"',loc) < flow.response.content.find('\'',loc) and flow.response.content.find('\"',loc) != -1:
+						urlBeg = flow.response.content.find('\"',loc)
+						urlEnd = flow.response.content.find('\"',urlBeg+1)
+					elif flow.response.content.find('\'',loc) != -1:
+						urlBeg = flow.response.content.find('\'', loc)
+						urlEnd = flow.response.content.find('\'', urlBeg + 1)
+
+					if urlBeg+1 < urlEnd and urlBeg != -1:
+						redirectUrl = flow.response.content[urlBeg+1:urlEnd]
 						redirection_candidates.append(redirectUrl)
-						print("[HTML Meta refresh] redirect to: " + redirectUrl)
+						print("[Javascript Redirect] redirect to: " + redirectUrl)
 
-		js_red = ['window.location','top.location','application.location']
-		for red_code in js_red:
-			urlBeg = urlEnd = -1
-			loc = flow.response.content.find(red_code)
-			if loc != -1:
-				#TODO should add support for (')
-				if flow.response.content.find('\"',loc) < flow.response.content.find('\'',loc) and flow.response.content.find('\"',loc) != -1:
-					urlBeg = flow.response.content.find('\"',loc)
-					urlEnd = flow.response.content.find('\"',urlBeg+1)
-				elif flow.response.content.find('\'',loc) != -1:
-					urlBeg = flow.response.content.find('\'', loc)
-					urlEnd = flow.response.content.find('\'', urlBeg + 1)
+			save_urls_to_db(redirection_candidates)
+			# print(redirection_candidates)
 
-				if urlBeg+1 < urlEnd and urlBeg != -1:
-					redirectUrl = flow.response.content[urlBeg+1:urlEnd]
-					redirection_candidates.append(redirectUrl)
-					print("[Javascript Redirect] redirect to: " + redirectUrl)
-
-		save_urls_to_db(redirection_candidates)
-		# print(redirection_candidates)
-
-		# print(flow.response.content)
+			# print(flow.response.content)
 
 	@staticmethod
 	def script_path():
 		path = os.path.abspath(__file__)
 		return path
+
+def add_url_to_chain(urlObj, RedChainObj):
+	RedChainObj.chain.append(urlObj)
+	RedChainObj.count += 1
+	RedChainObj.save()
 
 def save_urls_to_db(urls):
 		for url in urls:
