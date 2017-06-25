@@ -16,11 +16,15 @@ class MitmScript:
 	__lastConnectionAddress = ("",0)
 
 	@staticmethod
-	def set_static_redirection_chain(url, connectionAddrs):
+	def reset():
+		RedirectionChain.objects().delete()
+		Url.objects(parser="mitmproxy_script").delete()
+
+	def set_static_redirection_chain(self, url, connectionAddrs):
 		if len(MitmScript.__staticInitUrl) == 0:
-			MitmScript.delete_redirection_chains()
+			MitmScript.reset()
 			MitmScript.__setStaticInitUrl(url)
-			urlObj = save_url_to_db(url)
+			urlObj = self.save_url_to_db(url)
 			redirectionChain = RedirectionChain(init_url = url, count = 0)
 			redirectionChain.chain.append(urlObj)
 			redirectionChain.count += 1
@@ -28,11 +32,6 @@ class MitmScript:
 
 		if MitmScript.__lastConnectionAddress == ("",0):
 			MitmScript.__set_lastConnectionaddress(connectionAddrs)
-
-	@staticmethod
-	def delete_redirection_chains():
-		Url.objects(parser="mitmproxy_script").delete()
-		RedirectionChain.objects().delete()
 
 	@staticmethod
 	def __setStaticInitUrl(url):
@@ -52,14 +51,14 @@ class MitmScript:
 
 		if flow.request.method == "GET":
 			curr_requested_url = flow.request.url
-			redirection_candidates = load_urls_from_db()
-			MitmScript.set_static_redirection_chain(curr_requested_url, connectionAddrs)
+			redirection_candidates = self.load_urls_from_db()
+			self.set_static_redirection_chain(curr_requested_url, connectionAddrs)
 			for candidate in redirection_candidates:
 				if curr_requested_url == candidate and curr_requested_url != self.__staticInitUrl:
 					print("match! " + curr_requested_url + " == " + candidate)
-					urlObj = save_url_to_db(candidate)
+					urlObj = self.save_url_to_db(candidate)
 					redirection_chain = RedirectionChain.objects(init_url = MitmScript.__staticInitUrl).first()
-					add_url_to_chain(urlObj, redirection_chain)
+					self.add_url_to_chain(urlObj, redirection_chain)
 					MitmScript.__set_lastConnectionaddress(connectionAddrs)
 
 	def __last_url_in_chain(self, redirection_chain):
@@ -116,7 +115,7 @@ class MitmScript:
 						redirection_candidates.append(redirectUrl)
 						print("[Javascript Redirect] redirect to: " + redirectUrl)
 
-			save_urls_to_db(redirection_candidates)
+			self.save_urls_to_db(redirection_candidates)
 			# print(redirection_candidates)
 
 			# print(flow.response.content)
@@ -126,41 +125,44 @@ class MitmScript:
 		path = os.path.abspath(__file__)
 		return path
 
-def add_url_to_chain(urlObj, RedChainObj):
-	RedChainObj.chain.append(urlObj)
-	RedChainObj.count += 1
-	RedChainObj.save()
+	def add_url_to_chain(self, urlObj, RedChainObj):
+		RedChainObj.chain.append(urlObj)
+		RedChainObj.count += 1
+		RedChainObj.save()
 
-def save_urls_to_db(urls):
-		for url in urls:
-			save_url_to_db(url)
+	def save_urls_to_db(self, urls):
+			for url in urls:
+				self.save_url_to_db(url)
 
-def load_urls_from_db():
-	urls = []
-	try:
-		urlObjs = Url.objects(parser="mitmproxy_script")
-		for urlObj in urlObjs:
-			urls.append(urlObj.raw_data)
-		return urls
-	except Exception, e:
-		logger.error(e.message)
-		logger.error(traceback.format_exc())
-		return []
+	def load_urls_from_db(self):
+		urls = []
+		try:
+			urlObjs = Url.objects(parser="mitmproxy_script")
+			for urlObj in urlObjs:
+				urls.append(urlObj.raw_data)
+			return urls
+		except Exception, e:
+			logger.error(e.message)
+			logger.error(traceback.format_exc())
+			return []
 
-def save_url_to_db(raw_url):
-	try:
-		o = urlparse(raw_url)
-		fhash = hashlib.sha256()
-		fhash.update(raw_url)
-		urlObj, created = Url.objects.get_or_create(sha256=fhash.hexdigest(), raw_data=o.geturl(),
-													domain=o.netloc, protocol=o.scheme, path=o.path,
-													query=o.query, port=str(o.port), parser="mitmproxy_script")
-		urlObj.save()
-		return urlObj
-	except Exception, e:
-		logger.error(e.message)
-		logger.error(traceback.format_exc())
-		return None
+	def save_url_to_db(self, raw_url):
+		try:
+			o = urlparse(raw_url)
+			fhash = hashlib.sha256()
+			fhash.update(raw_url)
+			urlObj, created = Url.objects.get_or_create(sha256=fhash.hexdigest(), raw_data=o.geturl(),
+														domain=o.netloc, protocol=o.scheme, path=o.path,
+														query=o.query, port=str(o.port), parser="mitmproxy_script")
+			urlObj.save()
+			return urlObj
+		except Exception, e:
+			logger.error(e.message)
+			logger.error(traceback.format_exc())
+			return None
+
+
+
 
 def start():
 	return MitmScript()

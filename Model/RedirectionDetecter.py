@@ -18,23 +18,23 @@ class RedirectionDetecter(object):
 
     def find_redirection_chain(self, url):
         self.__initURL = url
-        if self.mitm_process.is_alive():
-            browser = Browser()
-            title = browser.get_url(url)
-            print title
-            browser.quit()
-            return self.__get_chain()
-        else:
-            print 'RedirectionDetecter Exception: mitmdump is not running'
-            raise Exception('RedirectionDetecter: mitmdump is not running')
+        if self.mitm_process.is_alive() == False:
+            self.__init__()
+        browser = Browser()
+        browser.get_url(url)
+        browser.quit()
+        self.kill()
+        return self.__get_chain()
 
     def __get_chain(self):
         time.sleep(5)
         urls = []
         redirection_chain = RedirectionChain.objects.first()
-        for urlObj in redirection_chain.chain:
-            urls.append(urlObj.raw_data)
+        if redirection_chain:
+            for urlObj in redirection_chain.chain:
+                urls.append(urlObj.raw_data)
         return urls
+
 
     def kill(self):
         if self.mitm_process.is_alive():
