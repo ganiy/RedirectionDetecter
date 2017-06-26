@@ -10,7 +10,6 @@ from orm import Url, RedirectionChain
 
 logger = logging.getLogger('root')
 
-
 class MitmScript:
 	__staticInitUrl = ""
 	__lastConnectionAddress = ("",0)
@@ -42,8 +41,6 @@ class MitmScript:
 		MitmScript.__lastConnectionAddress = address[0]
 
 	def request(self, flow):
-		# print("[request] " + flow.request.method + " " + flow.request.url)
-		# print("[request header] " + str(flow.request.headers))
 		if flow.server_conn.address:
 			connectionAddrs = flow.server_conn.address.address
 		elif flow.request:
@@ -55,7 +52,7 @@ class MitmScript:
 			self.set_static_redirection_chain(curr_requested_url, connectionAddrs)
 			for candidate in redirection_candidates:
 				if curr_requested_url == candidate and curr_requested_url != self.__staticInitUrl:
-					print("match! " + curr_requested_url + " == " + candidate)
+					logger.debug("[MitmScript] candidate match! " + curr_requested_url + " == " + candidate)
 					urlObj = self.save_url_to_db(candidate)
 					redirection_chain = RedirectionChain.objects(init_url = MitmScript.__staticInitUrl).first()
 					self.add_url_to_chain(urlObj, redirection_chain)
@@ -72,16 +69,13 @@ class MitmScript:
 		if redirection_chain is None:
 			return
 		curr_connection_addr = flow.server_conn.address.address
-		print("current connection: " + str(curr_connection_addr) + " == last connection: " + str(
-			self.__lastConnectionAddress) + " ?",)
 		if curr_connection_addr == self.__lastConnectionAddress:
-			print("yes")
 			# case: HTTP Redirects
 			if flow.response.status_code in [301, 302, 307]:
 				redirection = True
 				redirectUrl = flow.response.headers.get("Location", )
 				redirection_candidates.append(redirectUrl)
-				print("[HTTP Redirects] redirect to: " + redirectUrl)
+				logger.debug("[MitmScript] HTTP redirect candidate: " + redirectUrl)
 
 			# case: <meta http-equiv="Refresh" content="0; url=http://www.example.com/" />
 			content_type = flow.response.headers.get("Content-Type",)
@@ -96,7 +90,7 @@ class MitmScript:
 							redirection = True
 							redirectUrl = content[1]
 							redirection_candidates.append(redirectUrl)
-							print("[HTML Meta refresh] redirect to: " + redirectUrl)
+							logger.debug("[MitmScript]HTML meta tag redirect candidate: " + redirectUrl)
 
 			js_red = ['location']
 			for red_code in js_red:
@@ -113,12 +107,9 @@ class MitmScript:
 					if urlBeg+1 < urlEnd and urlBeg != -1:
 						redirectUrl = flow.response.content[urlBeg+1:urlEnd]
 						redirection_candidates.append(redirectUrl)
-						print("[Javascript Redirect] redirect to: " + redirectUrl)
+						logger.debug("[MitmScript] Javascript redirect candidate: " + redirectUrl)
 
 			self.save_urls_to_db(redirection_candidates)
-			# print(redirection_candidates)
-
-			# print(flow.response.content)
 
 	@staticmethod
 	def script_path():
